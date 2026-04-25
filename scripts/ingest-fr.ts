@@ -1,0 +1,363 @@
+// Fetches 10 CFR Part 53 from the Federal Register XML for the published
+// final rule (default doc number 2026-06048 — "Risk-Informed, Technology-
+// Inclusive Regulatory Framework for Advanced Reactors", 91 FR 15694,
+// March 30, 2026; the same content backing
+// https://www.regulations.gov/document/NRC-2019-0062-0310).
+//
+// Override with:  FR_DOC=YYYY-NNNNN  (e.g. FR_DOC=2026-07090 for a correction)
+//
+// Idempotent: clears subparts/sections/paragraphs/requirements/cross_refs/
+// definitions on each run; preserves notes and bookmarks (keyed by section_code).
+
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { XMLParser } from "fast-xml-parser";
+import { getRawDb, rebuildFts } from "../db/client";
+import { extractRequirements } from "./extract-requirements";
+import { extractXrefs } from "./extract-xrefs";
+import { extractDefinition } from "./extract-definitions";
+
+const DEFAULT_FR_DOC = "2026-06048";
+const DATA_DIR = path.join(process.cwd(), "data");
+const XML_PATH = path.join(DATA_DIR, "fr-part53.xml");
+
+type AnyNode = Record<string, unknown>;
+
+const parser = new XMLParser({
+  ignoreAttributes: false,
+  attributeNamePrefix: "",
+  preserveOrder: true,
+  trimValues: false,
+  parseTagValue: false,
+});
+
+function attrs(node: AnyNode): Record<string, string> {
+  return ((node[":@"] as Record<string, string>) ?? {}) as Record<string, string>;
+}
+
+function tagOf(node: AnyNode): string | null {
+  for (const k of Object.keys(node)) {
+    if (k !== ":@") return k;
+  }
+  return null;
+}
+
+async function lookupDocMeta(docNumber: string): Promise<{ xmlUrl: string; date: string; title: string }> {
+  const url = `https://www.federalregister.gov/api/v1/documents/${docNumber}.json`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Federal Register API: ${res.status} for ${docNumber}`);
+  const json = (await res.json()) as {
+    full_text_xml_url?: string;
+    publication_date: string;
+    title: string;
+  };
+  if (!json.full_text_xml_url) throw new Error(`No full_text_xml_url for ${docNumber}`);
+  return { xmlUrl: json.full_text_xml_url, date: json.publication_date, title: json.title };
+}
+
+async function loadXml(docNumber: string): Promise<{ xml: string; date: string; title: string }> {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  if (process.env.PART53_USE_CACHE === "1" && fs.existsSync(XML_PATH)) {
+    console.log(`using cached XML at ${XML_PATH}`);
+    return {
+      xml: fs.readFileSync(XML_PATH, "utf8"),
+      date: process.env.ECFR_DATE ?? "cached",
+      title: "(cached)",
+    };
+  }
+  const meta = await lookupDocMeta(docNumber);
+  console.log(`source: ${meta.title} (${meta.date})`);
+  console.log(`fetching ${meta.xmlUrl}`);
+  const res = await fetch(meta.xmlUrl);
+  if (!res.ok) throw new Error(`XML fetch failed: ${res.status}`);
+  const xml = await res.text();
+  fs.writeFileSync(XML_PATH, xml);
+  return { xml, date: meta.date, title: meta.title };
+}
+
+function textContent(arr: unknown): string {
+  if (!Array.isArray(arr)) return "";
+  let out = "";
+  for (const child of arr as AnyNode[]) {
+    if (!child) continue;
+    if (typeof child === "string") {
+      out += child;
+      continue;
+    }
+    if ("#text" in child && typeof child["#text"] === "string") {
+      out += child["#text"];
+      continue;
+    }
+    const tag = tagOf(child);
+    if (!tag) continue;
+    // skip page-break markers entirely
+    if (tag === "PRTPAGE") continue;
+    out += textContent(child[tag] as unknown);
+  }
+  return out;
+}
+
+function htmlContent(arr: unknown): string {
+  if (!Array.isArray(arr)) return "";
+  let out = "";
+  for (const child of arr as AnyNode[]) {
+    if (!child) continue;
+    if (typeof child === "string") {
+      out += escapeHtml(child);
+      continue;
+    }
+    if ("#text" in child && typeof child["#text"] === "string") {
+      out += escapeHtml(child["#text"]);
+      continue;
+    }
+    const tag = tagOf(child);
+    if (!tag) continue;
+    if (tag === "PRTPAGE") continue;
+    const inner = htmlContent(child[tag] as unknown);
+    if (tag === "E") out += `<em>${inner}</em>`;
+    else out += inner;
+  }
+  return out;
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function splitDesignator(text: string): { designator: string | null; rest: string } {
+  const m = text.match(/^\s*((?:\([a-z0-9ivxlcdm]+\))+)\s*(.*)$/i);
+  if (m) return { designator: m[1], rest: m[2] };
+  return { designator: null, rest: text };
+}
+
+function depthFromDesignator(d: string | null): number {
+  return d ? (d.match(/\(/g) ?? []).length : 0;
+}
+
+type ParsedSection = {
+  code: string;
+  title: string;
+  paragraphs: Array<{ designator: string | null; depth: number; textHtml: string; textPlain: string }>;
+};
+type ParsedSubpart = { code: string; title: string; sections: ParsedSection[] };
+
+function parseSubpartHeading(raw: string): { code: string; title: string } {
+  // "Subpart A—General Provisions"
+  const m = raw.match(/Subpart\s+([A-Z])\s*[—\-:]\s*(.+?)\s*$/);
+  if (m) return { code: m[1], title: m[2] };
+  return { code: raw.slice(0, 4), title: raw };
+}
+
+function parseSectionCode(rawSectno: string): string {
+  // "§ 53.000" → "53.000"
+  const m = rawSectno.match(/(\d{2,3}\.\d{1,4})/);
+  return m ? m[1] : rawSectno.trim();
+}
+
+function buildSection(sectionNode: AnyNode): ParsedSection | null {
+  const children = sectionNode["SECTION"] as unknown;
+  if (!Array.isArray(children)) return null;
+  let code = "";
+  let title = "";
+  const paragraphs: ParsedSection["paragraphs"] = [];
+  for (const child of children as AnyNode[]) {
+    const tag = tagOf(child);
+    if (!tag) continue;
+    if (tag === "SECTNO") code = parseSectionCode(textContent(child[tag] as unknown));
+    else if (tag === "SUBJECT") title = textContent(child[tag] as unknown).replace(/\.\s*$/, "").trim();
+    else if (tag === "P") {
+      const html = htmlContent(child[tag] as unknown);
+      const plain = textContent(child[tag] as unknown).replace(/\s+/g, " ").trim();
+      if (!plain) continue;
+      const { designator, rest } = splitDesignator(plain);
+      paragraphs.push({
+        designator,
+        depth: depthFromDesignator(designator),
+        textHtml: html,
+        textPlain: rest || plain,
+      });
+    }
+  }
+  if (!code) return null;
+  return { code, title, paragraphs };
+}
+
+// Walk the parsed XML tree to find the Part 53 region and extract subparts/sections.
+function collectPart53(roots: unknown): ParsedSubpart[] {
+  const subparts: ParsedSubpart[] = [];
+  let foundPart53 = false;
+  let preamble: ParsedSubpart | null = null;
+
+  function walk(arr: unknown) {
+    if (!Array.isArray(arr)) return;
+    for (const node of arr as AnyNode[]) {
+      const tag = tagOf(node);
+      if (!tag) continue;
+      const inner = node[tag] as unknown;
+
+      if (tag === "PART") {
+        // Look for the PART 53 heading
+        const heading = findHeading(inner);
+        if (heading && /PART\s+53\b/i.test(heading)) {
+          foundPart53 = true;
+          // Collect any sections inside <PART> directly into a synthetic "_" preamble subpart
+          const innerSections: ParsedSection[] = [];
+          if (Array.isArray(inner)) {
+            for (const c of inner as AnyNode[]) {
+              if (tagOf(c) === "SECTION") {
+                const sec = buildSection(c);
+                if (sec) innerSections.push(sec);
+              }
+            }
+          }
+          if (innerSections.length) {
+            preamble = { code: "_", title: "Part 53 Introduction", sections: innerSections };
+          }
+        } else if (foundPart53 && heading && /PART\s+\d+/i.test(heading) && !/PART\s+53\b/i.test(heading)) {
+          // Different part — stop collecting
+          foundPart53 = false;
+        }
+        // continue walking to discover SUBPART siblings even within REGTEXT
+        walk(inner);
+        continue;
+      }
+
+      if (tag === "SUBPART" && foundPart53) {
+        const heading = findHeading(inner);
+        if (!heading) {
+          walk(inner);
+          continue;
+        }
+        const { code, title } = parseSubpartHeading(heading);
+        const sections: ParsedSection[] = [];
+        if (Array.isArray(inner)) {
+          for (const c of inner as AnyNode[]) {
+            if (tagOf(c) === "SECTION") {
+              const sec = buildSection(c);
+              if (sec) sections.push(sec);
+            }
+          }
+        }
+        if (sections.length) subparts.push({ code, title, sections });
+        continue;
+      }
+
+      // Recurse into containers we expect (REGTEXT, RULE, etc.)
+      walk(inner);
+    }
+  }
+
+  function findHeading(arr: unknown): string | null {
+    if (!Array.isArray(arr)) return null;
+    for (const c of arr as AnyNode[]) {
+      if (tagOf(c) === "HD") {
+        const a = attrs(c);
+        if (a.SOURCE === "HED") return textContent(c["HD"] as unknown).trim();
+      }
+    }
+    return null;
+  }
+
+  walk(roots);
+
+  if (preamble) return [preamble, ...subparts];
+  return subparts;
+}
+
+async function main() {
+  console.log("─── 10 CFR Part 53 ingest (Federal Register source) ───");
+  const docNumber = process.env.FR_DOC ?? DEFAULT_FR_DOC;
+  console.log(`Federal Register doc: ${docNumber}`);
+  const { xml, date, title } = await loadXml(docNumber);
+  console.log(`parsing ${xml.length.toLocaleString()} bytes`);
+
+  const roots = parser.parse(xml);
+  const subparts = collectPart53(roots);
+  console.log(`extracted ${subparts.length} subparts`);
+  if (!subparts.length) {
+    console.error("\nNo Part 53 content found in the Federal Register document.");
+    process.exit(2);
+  }
+
+  const sqlite = getRawDb();
+  const tx = sqlite.transaction(() => {
+    sqlite.exec(`
+      DELETE FROM cross_refs;
+      DELETE FROM definitions;
+      DELETE FROM requirements;
+      DELETE FROM paragraphs;
+      DELETE FROM sections;
+      DELETE FROM subparts;
+    `);
+
+    const insSubpart = sqlite.prepare(`INSERT INTO subparts (code, title, ordinal) VALUES (?, ?, ?)`);
+    const insSection = sqlite.prepare(
+      `INSERT INTO sections (subpart_id, code, title, ordinal) VALUES (?, ?, ?, ?)`,
+    );
+    const insParagraph = sqlite.prepare(
+      `INSERT INTO paragraphs (section_id, designator, depth, parent_id, text_html, text_plain, ordinal)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const insRequirement = sqlite.prepare(
+      `INSERT INTO requirements (paragraph_id, section_id, modal, text) VALUES (?, ?, ?, ?)`,
+    );
+    const insXref = sqlite.prepare(
+      `INSERT INTO cross_refs (source_paragraph_id, source_section_id, target_kind, target_section_code, target_label, raw)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    const insDef = sqlite.prepare(
+      `INSERT OR IGNORE INTO definitions (term, paragraph_id, section_id, text) VALUES (?, ?, ?, ?)`,
+    );
+    const insRun = sqlite.prepare(
+      `INSERT INTO ingest_runs (source_date, amendment_date, paragraph_count, section_count, subpart_count, completed_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+
+    let totalParagraphs = 0;
+    let totalSections = 0;
+
+    subparts.forEach((sp, i) => {
+      const subpartId = insSubpart.run(sp.code, sp.title, i + 1).lastInsertRowid as number;
+      sp.sections.forEach((sec, j) => {
+        const sectionId = insSection.run(subpartId, sec.code, sec.title, j + 1).lastInsertRowid as number;
+        totalSections++;
+        sec.paragraphs.forEach((para, k) => {
+          const paragraphId = insParagraph.run(
+            sectionId,
+            para.designator,
+            para.depth,
+            null,
+            para.textHtml,
+            para.textPlain,
+            k + 1,
+          ).lastInsertRowid as number;
+          totalParagraphs++;
+          for (const req of extractRequirements(para.textPlain)) {
+            insRequirement.run(paragraphId, sectionId, req.modal, req.text);
+          }
+          for (const xr of extractXrefs(para.textPlain)) {
+            insXref.run(paragraphId, sectionId, xr.targetKind, xr.targetSectionCode, xr.targetLabel, xr.raw);
+          }
+          if (sp.code === "A") {
+            const def = extractDefinition(para.textPlain);
+            if (def) insDef.run(def.term, paragraphId, sectionId, def.text);
+          }
+        });
+      });
+    });
+
+    insRun.run(`fr:${docNumber}`, date, totalParagraphs, totalSections, subparts.length, Date.now());
+    console.log(
+      `inserted: ${subparts.length} subparts, ${totalSections} sections, ${totalParagraphs} paragraphs`,
+    );
+    console.log(`source: Federal Register ${docNumber} — ${title}`);
+  });
+  tx();
+  rebuildFts();
+  console.log("FTS rebuilt; ingest complete.");
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
