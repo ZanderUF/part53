@@ -42,26 +42,23 @@ export type PartInfo = { part_number: string; title: string; subpart_count: numb
 export function listParts(): PartInfo[] {
   return getRawDb()
     .prepare(
-      `SELECT sp.part_number, sp.title AS title,
+      `SELECT p.part_number, p.title,
               COUNT(DISTINCT sp.id) AS subpart_count,
               COUNT(DISTINCT s.id) AS section_count
-       FROM subparts sp
+       FROM parts p
+       LEFT JOIN subparts sp ON sp.part_number = p.part_number
        LEFT JOIN sections s ON s.subpart_id = sp.id
-       GROUP BY sp.part_number
-       ORDER BY sp.part_number`,
+       GROUP BY p.part_number
+       ORDER BY CAST(p.part_number AS INTEGER)`,
     )
     .all() as PartInfo[];
 }
 
 export function partTitle(partNumber: string): string {
   const row = getRawDb()
-    .prepare(`SELECT title FROM subparts WHERE part_number = ? AND code = '_' LIMIT 1`)
+    .prepare(`SELECT title FROM parts WHERE part_number = ?`)
     .get(partNumber) as { title: string } | undefined;
-  if (row) return row.title;
-  const row2 = getRawDb()
-    .prepare(`SELECT title FROM subparts WHERE part_number = ? ORDER BY ordinal LIMIT 1`)
-    .get(partNumber) as { title: string } | undefined;
-  return row2?.title ?? `Part ${partNumber}`;
+  return row?.title ?? `Part ${partNumber}`;
 }
 
 export function listSubparts(partNumber?: string): Subpart[] {

@@ -183,10 +183,22 @@ function buildSection(sectionNode: AnyNode): ParsedSection | null {
 }
 
 // Walk the parsed XML tree to find the Part 53 region and extract subparts/sections.
-function collectPartSections(roots: unknown, partNum: string): ParsedSubpart[] {
+function toTitleCase(s: string): string {
+  const minor = new Set(["a", "an", "the", "and", "but", "or", "for", "nor", "of", "in", "on", "at", "to", "by", "with"]);
+  return s
+    .toLowerCase()
+    .split(/\s+/)
+    .map((w, i) => (i === 0 || !minor.has(w) ? w.charAt(0).toUpperCase() + w.slice(1) : w))
+    .join(" ");
+}
+
+type CollectResult = { subparts: ParsedSubpart[]; partHeading: string | null };
+
+function collectPartSections(roots: unknown, partNum: string): CollectResult {
   const subparts: ParsedSubpart[] = [];
   let foundTarget = false;
   let preamble: ParsedSubpart | null = null;
+  let partHeading: string | null = null;
   const partRe = new RegExp(`PART\\s+${partNum}\\b`, "i");
 
   function walk(arr: unknown) {
@@ -200,6 +212,8 @@ function collectPartSections(roots: unknown, partNum: string): ParsedSubpart[] {
         const heading = findHeading(inner);
         if (heading && partRe.test(heading)) {
           foundTarget = true;
+          const rawTitle = heading.replace(/^PART\s+\d+\s*[—\-:]\s*/i, "").trim() || heading;
+          partHeading = toTitleCase(rawTitle);
           const innerSections: ParsedSection[] = [];
           if (Array.isArray(inner)) {
             for (const c of inner as AnyNode[]) {
@@ -257,8 +271,8 @@ function collectPartSections(roots: unknown, partNum: string): ParsedSubpart[] {
 
   walk(roots);
 
-  if (preamble) return [preamble, ...subparts];
-  return subparts;
+  const allSubparts = preamble ? [preamble, ...subparts] : subparts;
+  return { subparts: allSubparts, partHeading };
 }
 
 async function main() {
@@ -271,8 +285,9 @@ async function main() {
   console.log(`parsing ${xml.length.toLocaleString()} bytes`);
 
   const roots = parser.parse(xml);
-  const subparts = collectPartSections(roots, partNum);
+  const { subparts, partHeading } = collectPartSections(roots, partNum);
   console.log(`extracted ${subparts.length} subparts`);
+  if (partHeading) console.log(`part heading: ${partHeading}`);
   if (!subparts.length) {
     console.error(`\nNo Part ${partNum} content found in the Federal Register document.`);
     process.exit(2);
@@ -301,6 +316,15 @@ async function main() {
       }
       sqlite.prepare(`DELETE FROM subparts WHERE part_number = ?`).run(partNum);
     }
+
+    sqlite.prepare(
+      `INSERT OR REPLACE INTO parts (part_number, title, fr_doc, source_url) VALUES (?, ?, ?, ?)`,
+    ).run(
+      partNum,
+      partHeading ?? title,
+      docNumber,
+      `https://www.federalregister.gov/documents/full_text/xml/${date.replace(/-/g, "/")}/${docNumber}.xml`,
+    );
 
     const insSubpart = sqlite.prepare(`INSERT INTO subparts (part_number, code, title, ordinal) VALUES (?, ?, ?, ?)`);
     const insSection = sqlite.prepare(

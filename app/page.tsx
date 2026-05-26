@@ -25,19 +25,23 @@ export default function Home() {
       {parts.map((part) => {
         const subparts = listSubparts(part.part_number);
         return (
-          <section key={part.part_number}>
-            <h2 className="mb-3 text-lg font-semibold">
-              Part {part.part_number}
-              <span className="ml-2 text-sm font-normal text-slate-500">
-                {part.subpart_count} subparts · {part.section_count} sections
-              </span>
+          <section key={part.part_number} className="rounded-lg border border-slate-200 bg-white p-6">
+            <h2 className="text-xl font-semibold text-ink">
+              10 CFR Part {part.part_number}
             </h2>
+            <p className="mt-1 text-sm text-slate-600">{part.title}</p>
+            <p className="mt-1 text-xs text-slate-400">
+              {part.subpart_count} subparts · {part.section_count} sections
+            </p>
+            <h3 className="mt-4 mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">
+              Subparts
+            </h3>
             <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               {subparts.map((sp) => (
                 <li key={`${sp.part_number}-${sp.code}`}>
                   <Link
                     href={`/part/${sp.part_number}/${sp.code}`}
-                    className="block rounded border border-slate-200 bg-white p-4 hover:border-accent hover:shadow-sm"
+                    className="block rounded border border-slate-100 bg-slate-50 p-4 hover:border-accent hover:shadow-sm"
                   >
                     <div className="text-xs uppercase tracking-wide text-slate-500">
                       Part {sp.part_number} · Subpart {sp.code}

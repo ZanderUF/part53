@@ -29,6 +29,13 @@ export function getRawDb() {
 
 function ensureSchema(sqlite: Database.Database) {
   sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS parts (
+      part_number TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      fr_doc TEXT,
+      source_url TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS subparts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       part_number TEXT NOT NULL DEFAULT '53',
