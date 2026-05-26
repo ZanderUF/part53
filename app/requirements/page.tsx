@@ -1,17 +1,19 @@
 import Link from "next/link";
-import { listAllRequirements, listSubparts } from "@/db/queries";
+import { listAllRequirements, listParts, listSubparts } from "@/db/queries";
 import { EmptyState } from "@/components/EmptyState";
 
 export default async function RequirementsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ subpart?: string; modal?: string; status?: string }>;
+  searchParams: Promise<{ part?: string; subpart?: string; modal?: string; status?: string }>;
 }) {
   const sp = await searchParams;
-  const subparts = listSubparts();
-  if (!subparts.length) return <EmptyState />;
+  const parts = listParts();
+  if (!parts.length) return <EmptyState />;
 
+  const subparts = sp.part ? listSubparts(sp.part) : listSubparts();
   const reqs = listAllRequirements({
+    partNumber: sp.part,
     subpartCode: sp.subpart,
     modal: sp.modal,
     status: sp.status,
@@ -25,15 +27,36 @@ export default async function RequirementsPage({
       <header>
         <h1 className="text-2xl font-semibold">Requirements catalog</h1>
         <p className="mt-1 text-sm text-slate-600">
-          Auto-extracted modal-verb statements (shall / must / may not). Filter by subpart, modal, or
-          status.
+          Auto-extracted modal-verb statements (shall / must / may not). Filter by part, subpart,
+          modal, or status.
         </p>
       </header>
 
       <form className="flex flex-wrap gap-3 text-sm">
-        <FilterSelect name="subpart" current={sp.subpart} options={subparts.map((s) => ({ value: s.code, label: `Subpart ${s.code}` }))} placeholder="All subparts" />
-        <FilterSelect name="modal" current={sp.modal} options={modals.map((m) => ({ value: m, label: m }))} placeholder="All modals" />
-        <FilterSelect name="status" current={sp.status} options={statuses.map((m) => ({ value: m, label: m }))} placeholder="All statuses" />
+        <FilterSelect
+          name="part"
+          current={sp.part}
+          options={parts.map((p) => ({ value: p.part_number, label: `Part ${p.part_number}` }))}
+          placeholder="All parts"
+        />
+        <FilterSelect
+          name="subpart"
+          current={sp.subpart}
+          options={subparts.map((s) => ({ value: s.code, label: `Subpart ${s.code}` }))}
+          placeholder="All subparts"
+        />
+        <FilterSelect
+          name="modal"
+          current={sp.modal}
+          options={modals.map((m) => ({ value: m, label: m }))}
+          placeholder="All modals"
+        />
+        <FilterSelect
+          name="status"
+          current={sp.status}
+          options={statuses.map((m) => ({ value: m, label: m }))}
+          placeholder="All statuses"
+        />
         <button type="submit" className="rounded bg-accent px-3 py-1.5 text-white">
           Apply
         </button>
@@ -48,11 +71,14 @@ export default async function RequirementsPage({
         {reqs.map((r) => (
           <li key={r.id} className="rounded border border-slate-200 bg-white p-3">
             <div className="flex items-baseline justify-between gap-3">
-              <Link href={`/section/${r.section_code}#p-${r.paragraph_id}`} className="text-xs xref-link">
+              <Link
+                href={`/section/${r.section_code}#p-${r.paragraph_id}`}
+                className="text-xs xref-link"
+              >
                 § {r.section_code} — {r.section_title}
               </Link>
               <span className="text-[10px] uppercase tracking-wide text-slate-500">
-                Subpart {r.subpart_code} · {r.modal} · {r.status}
+                Part {r.part_number} · Subpart {r.subpart_code} · {r.modal} · {r.status}
               </span>
             </div>
             <p className="mt-2 text-sm text-slate-800">{r.text}</p>

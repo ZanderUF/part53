@@ -1,10 +1,16 @@
 import Link from "next/link";
-import { getSectionById, listDefinitions, listSubparts } from "@/db/queries";
+import { getSectionById, listDefinitions, listParts } from "@/db/queries";
 import { EmptyState } from "@/components/EmptyState";
 
-export default function GlossaryPage() {
-  if (!listSubparts().length) return <EmptyState />;
-  const defs = listDefinitions();
+export default async function GlossaryPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ part?: string }>;
+}) {
+  const sp = await searchParams;
+  const parts = listParts();
+  if (!parts.length) return <EmptyState />;
+  const defs = listDefinitions(sp.part);
 
   return (
     <div className="space-y-6">
@@ -14,6 +20,27 @@ export default function GlossaryPage() {
           Defined terms extracted from Subpart A. Click a term to jump to its source paragraph.
         </p>
       </header>
+
+      {parts.length > 1 && (
+        <div className="flex gap-2 text-sm">
+          <Link
+            href="/glossary"
+            className={`rounded border px-3 py-1 ${!sp.part ? "border-accent bg-accent/10 text-accent" : "border-slate-300"}`}
+          >
+            All
+          </Link>
+          {parts.map((p) => (
+            <Link
+              key={p.part_number}
+              href={`/glossary?part=${p.part_number}`}
+              className={`rounded border px-3 py-1 ${sp.part === p.part_number ? "border-accent bg-accent/10 text-accent" : "border-slate-300"}`}
+            >
+              Part {p.part_number}
+            </Link>
+          ))}
+        </div>
+      )}
+
       {defs.length === 0 ? (
         <p className="text-sm text-slate-600">No definitions extracted yet.</p>
       ) : (

@@ -1,6 +1,6 @@
 import { getRawDb } from "./client";
 
-export type Subpart = { id: number; code: string; title: string; ordinal: number };
+export type Subpart = { id: number; part_number: string; code: string; title: string; ordinal: number };
 export type Section = { id: number; subpart_id: number; code: string; title: string; ordinal: number };
 export type Paragraph = {
   id: number;
@@ -37,17 +37,49 @@ export type Definition = {
   text: string;
 };
 
-export function listSubparts(): Subpart[] {
+export type PartInfo = { part_number: string; title: string; subpart_count: number; section_count: number };
+
+export function listParts(): PartInfo[] {
   return getRawDb()
-    .prepare(`SELECT * FROM subparts ORDER BY ordinal`)
+    .prepare(
+      `SELECT sp.part_number, sp.title AS title,
+              COUNT(DISTINCT sp.id) AS subpart_count,
+              COUNT(DISTINCT s.id) AS section_count
+       FROM subparts sp
+       LEFT JOIN sections s ON s.subpart_id = sp.id
+       GROUP BY sp.part_number
+       ORDER BY sp.part_number`,
+    )
+    .all() as PartInfo[];
+}
+
+export function partTitle(partNumber: string): string {
+  const row = getRawDb()
+    .prepare(`SELECT title FROM subparts WHERE part_number = ? AND code = '_' LIMIT 1`)
+    .get(partNumber) as { title: string } | undefined;
+  if (row) return row.title;
+  const row2 = getRawDb()
+    .prepare(`SELECT title FROM subparts WHERE part_number = ? ORDER BY ordinal LIMIT 1`)
+    .get(partNumber) as { title: string } | undefined;
+  return row2?.title ?? `Part ${partNumber}`;
+}
+
+export function listSubparts(partNumber?: string): Subpart[] {
+  if (partNumber) {
+    return getRawDb()
+      .prepare(`SELECT * FROM subparts WHERE part_number = ? ORDER BY ordinal`)
+      .all(partNumber) as Subpart[];
+  }
+  return getRawDb()
+    .prepare(`SELECT * FROM subparts ORDER BY part_number, ordinal`)
     .all() as Subpart[];
 }
 
-export function getSubpart(code: string): Subpart | null {
+export function getSubpart(partNumber: string, code: string): Subpart | null {
   return (
     (getRawDb()
-      .prepare(`SELECT * FROM subparts WHERE code = ?`)
-      .get(code) as Subpart | undefined) ?? null
+      .prepare(`SELECT * FROM subparts WHERE part_number = ? AND code = ?`)
+      .get(partNumber, code) as Subpart | undefined) ?? null
   );
 }
 
@@ -63,6 +95,23 @@ export function getSection(code: string): Section | null {
       .prepare(`SELECT * FROM sections WHERE code = ?`)
       .get(code) as Section | undefined) ?? null
   );
+}
+
+export function getSectionById(id: number): Section | null {
+  return (
+    (getRawDb()
+      .prepare(`SELECT * FROM sections WHERE id = ?`)
+      .get(id) as Section | undefined) ?? null
+  );
+}
+
+export function partNumberForSection(sectionCode: string): string | null {
+  const row = getRawDb()
+    .prepare(
+      `SELECT sp.part_number FROM sections s JOIN subparts sp ON sp.id = s.subpart_id WHERE s.code = ?`,
+    )
+    .get(sectionCode) as { part_number: string } | undefined;
+  return row?.part_number ?? null;
 }
 
 export function listParagraphs(sectionId: number): Paragraph[] {
@@ -81,9 +130,14 @@ export function listAllRequirements(filter: {
   modal?: string;
   status?: string;
   subpartCode?: string;
-}): Array<Requirement & { section_code: string; section_title: string; subpart_code: string }> {
+  partNumber?: string;
+}): Array<Requirement & { section_code: string; section_title: string; subpart_code: string; part_number: string }> {
   const where: string[] = [];
   const params: unknown[] = [];
+  if (filter.partNumber) {
+    where.push(`sp.part_number = ?`);
+    params.push(filter.partNumber);
+  }
   if (filter.modal) {
     where.push(`r.modal = ?`);
     params.push(filter.modal);
@@ -97,15 +151,16 @@ export function listAllRequirements(filter: {
     params.push(filter.subpartCode);
   }
   const sql = `
-    SELECT r.*, s.code AS section_code, s.title AS section_title, sp.code AS subpart_code
+    SELECT r.*, s.code AS section_code, s.title AS section_title,
+           sp.code AS subpart_code, sp.part_number
     FROM requirements r
     JOIN sections s ON s.id = r.section_id
     JOIN subparts sp ON sp.id = s.subpart_id
     ${where.length ? "WHERE " + where.join(" AND ") : ""}
-    ORDER BY s.ordinal, r.id
+    ORDER BY sp.part_number, s.ordinal, r.id
   `;
   return getRawDb().prepare(sql).all(...params) as Array<
-    Requirement & { section_code: string; section_title: string; subpart_code: string }
+    Requirement & { section_code: string; section_title: string; subpart_code: string; part_number: string }
   >;
 }
 
@@ -127,29 +182,27 @@ export function listIncomingXrefs(sectionCode: string): Array<CrossRef & { sourc
     .all(sectionCode) as Array<CrossRef & { source_section_code: string }>;
 }
 
-export function listAllSectionXrefs(): Array<{
+export function listAllSectionXrefs(partNumber?: string): Array<{
   source: string;
   target: string;
   count: number;
 }> {
+  const partFilter = partNumber
+    ? `AND sp.part_number = ?`
+    : "";
+  const params = partNumber ? [partNumber] : [];
   return getRawDb()
     .prepare(
       `SELECT s.code AS source, cr.target_section_code AS target, COUNT(*) AS count
        FROM cross_refs cr
        JOIN sections s ON s.id = cr.source_section_id
+       JOIN subparts sp ON sp.id = s.subpart_id
        WHERE cr.target_kind = 'section'
          AND cr.target_section_code IN (SELECT code FROM sections)
+         ${partFilter}
        GROUP BY s.code, cr.target_section_code`,
     )
-    .all() as Array<{ source: string; target: string; count: number }>;
-}
-
-export function getSectionById(id: number): Section | null {
-  return (
-    (getRawDb()
-      .prepare(`SELECT * FROM sections WHERE id = ?`)
-      .get(id) as Section | undefined) ?? null
-  );
+    .all(...params) as Array<{ source: string; target: string; count: number }>;
 }
 
 export function listAllSectionCodes(): string[] {
@@ -158,7 +211,18 @@ export function listAllSectionCodes(): string[] {
   );
 }
 
-export function listDefinitions(): Definition[] {
+export function listDefinitions(partNumber?: string): Definition[] {
+  if (partNumber) {
+    return getRawDb()
+      .prepare(
+        `SELECT d.* FROM definitions d
+         JOIN sections s ON s.id = d.section_id
+         JOIN subparts sp ON sp.id = s.subpart_id
+         WHERE sp.part_number = ?
+         ORDER BY d.term COLLATE NOCASE`,
+      )
+      .all(partNumber) as Definition[];
+  }
   return getRawDb()
     .prepare(`SELECT * FROM definitions ORDER BY term COLLATE NOCASE`)
     .all() as Definition[];
@@ -172,7 +236,6 @@ export function getDefinitionsMap(): Map<string, Definition> {
 
 export function searchParagraphs(query: string, limit = 50) {
   if (!query.trim()) return [];
-  // FTS5: escape double quotes by doubling, wrap each token in quotes for "phrase-or-prefix" matching.
   const safe = query
     .trim()
     .split(/\s+/)
@@ -181,10 +244,12 @@ export function searchParagraphs(query: string, limit = 50) {
   return getRawDb()
     .prepare(
       `SELECT p.id, p.designator, p.text_plain, s.code AS section_code, s.title AS section_title,
+              sp.part_number,
               snippet(paragraphs_fts, 2, '<mark>', '</mark>', '…', 18) AS snippet
        FROM paragraphs_fts
        JOIN paragraphs p ON p.id = paragraphs_fts.rowid
        JOIN sections s ON s.id = p.section_id
+       JOIN subparts sp ON sp.id = s.subpart_id
        WHERE paragraphs_fts MATCH ?
        LIMIT ?`,
     )
@@ -194,6 +259,7 @@ export function searchParagraphs(query: string, limit = 50) {
     text_plain: string;
     section_code: string;
     section_title: string;
+    part_number: string;
     snippet: string;
   }>;
 }

@@ -9,6 +9,7 @@ import {
   listSectionsBySubpart,
   listSubparts,
   listXrefsBySection,
+  partNumberForSection,
 } from "@/db/queries";
 import { ParagraphRenderer } from "@/components/ParagraphRenderer";
 
@@ -17,7 +18,8 @@ export default async function SectionPage({ params }: { params: Promise<{ code: 
   const section = getSection(code);
   if (!section) notFound();
 
-  const subpart = listSubparts().find((sp) => sp.id === section.subpart_id) ?? null;
+  const partNum = partNumberForSection(code) ?? "53";
+  const subpart = listSubparts(partNum).find((sp) => sp.id === section.subpart_id) ?? null;
   const siblings = subpart ? listSectionsBySubpart(subpart.id) : [];
   const paragraphs = listParagraphs(section.id);
   const requirements = listRequirementsForSection(section.id);
@@ -29,13 +31,16 @@ export default async function SectionPage({ params }: { params: Promise<{ code: 
     <div className="space-y-8">
       <nav className="text-xs text-slate-500">
         <Link href="/" className="hover:text-accent">
-          Part 53
+          Home
         </Link>{" "}
-        /{" "}
+        / Part {partNum}{" "}
         {subpart && (
-          <Link href={`/subpart/${subpart.code}`} className="hover:text-accent">
-            Subpart {subpart.code}
-          </Link>
+          <>
+            /{" "}
+            <Link href={`/part/${partNum}/${subpart.code}`} className="hover:text-accent">
+              Subpart {subpart.code}
+            </Link>
+          </>
         )}{" "}
         / § {section.code}
       </nav>
@@ -46,7 +51,7 @@ export default async function SectionPage({ params }: { params: Promise<{ code: 
           <h1 className="mt-1 text-2xl font-semibold">{section.title}</h1>
         </div>
         <a
-          href={`https://www.ecfr.gov/current/title-10/chapter-I/part-53/section-${section.code}`}
+          href={`https://www.ecfr.gov/current/title-10/chapter-I/part-${code.split(".")[0]}/section-${section.code}`}
           target="_blank"
           rel="noreferrer"
           className="text-xs xref-link"

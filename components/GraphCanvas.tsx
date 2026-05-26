@@ -27,15 +27,17 @@ function colorFor(subpartCode: string, all: string[]): string {
   return SUBPART_COLORS[idx % SUBPART_COLORS.length];
 }
 
-export function GraphCanvas() {
+export function GraphCanvas({ parts }: { parts: string[] }) {
+  const [partFilter, setPartFilter] = useState<string>(parts[0] ?? "");
   const [data, setData] = useState<GraphData | null>(null);
   const [filter, setFilter] = useState<string>("");
 
   useEffect(() => {
-    fetch("/api/graph")
+    const qs = partFilter ? `?part=${partFilter}` : "";
+    fetch(`/api/graph${qs}`)
       .then((r) => r.json())
       .then(setData);
-  }, []);
+  }, [partFilter]);
 
   const { nodes, edges } = useMemo(() => {
     if (!data) return { nodes: [] as Node[], edges: [] as Edge[] };
@@ -103,6 +105,21 @@ export function GraphCanvas() {
   return (
     <div className="relative h-full">
       <div className="absolute left-3 top-3 z-10 flex gap-2 rounded bg-white/90 p-2 text-xs shadow">
+        {parts.length > 1 && (
+          <>
+            <label>Part:</label>
+            <select
+              value={partFilter}
+              onChange={(e) => { setPartFilter(e.target.value); setFilter(""); }}
+              className="rounded border border-slate-300 px-1"
+            >
+              <option value="">All</option>
+              {parts.map((p) => (
+                <option key={p} value={p}>Part {p}</option>
+              ))}
+            </select>
+          </>
+        )}
         <label>Subpart:</label>
         <select
           value={filter}

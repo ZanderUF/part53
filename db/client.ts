@@ -31,11 +31,12 @@ function ensureSchema(sqlite: Database.Database) {
   sqlite.exec(`
     CREATE TABLE IF NOT EXISTS subparts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      part_number TEXT NOT NULL DEFAULT '53',
       code TEXT NOT NULL,
       title TEXT NOT NULL,
       ordinal INTEGER NOT NULL
     );
-    CREATE UNIQUE INDEX IF NOT EXISTS subparts_code_idx ON subparts(code);
+    CREATE UNIQUE INDEX IF NOT EXISTS subparts_part_code_idx ON subparts(part_number, code);
 
     CREATE TABLE IF NOT EXISTS sections (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

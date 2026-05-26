@@ -183,10 +183,11 @@ function buildSection(sectionNode: AnyNode): ParsedSection | null {
 }
 
 // Walk the parsed XML tree to find the Part 53 region and extract subparts/sections.
-function collectPart53(roots: unknown): ParsedSubpart[] {
+function collectPartSections(roots: unknown, partNum: string): ParsedSubpart[] {
   const subparts: ParsedSubpart[] = [];
-  let foundPart53 = false;
+  let foundTarget = false;
   let preamble: ParsedSubpart | null = null;
+  const partRe = new RegExp(`PART\\s+${partNum}\\b`, "i");
 
   function walk(arr: unknown) {
     if (!Array.isArray(arr)) return;
@@ -196,11 +197,9 @@ function collectPart53(roots: unknown): ParsedSubpart[] {
       const inner = node[tag] as unknown;
 
       if (tag === "PART") {
-        // Look for the PART 53 heading
         const heading = findHeading(inner);
-        if (heading && /PART\s+53\b/i.test(heading)) {
-          foundPart53 = true;
-          // Collect any sections inside <PART> directly into a synthetic "_" preamble subpart
+        if (heading && partRe.test(heading)) {
+          foundTarget = true;
           const innerSections: ParsedSection[] = [];
           if (Array.isArray(inner)) {
             for (const c of inner as AnyNode[]) {
@@ -211,18 +210,16 @@ function collectPart53(roots: unknown): ParsedSubpart[] {
             }
           }
           if (innerSections.length) {
-            preamble = { code: "_", title: "Part 53 Introduction", sections: innerSections };
+            preamble = { code: "_", title: `Part ${partNum} Introduction`, sections: innerSections };
           }
-        } else if (foundPart53 && heading && /PART\s+\d+/i.test(heading) && !/PART\s+53\b/i.test(heading)) {
-          // Different part — stop collecting
-          foundPart53 = false;
+        } else if (foundTarget && heading && /PART\s+\d+/i.test(heading) && !partRe.test(heading)) {
+          foundTarget = false;
         }
-        // continue walking to discover SUBPART siblings even within REGTEXT
         walk(inner);
         continue;
       }
 
-      if (tag === "SUBPART" && foundPart53) {
+      if (tag === "SUBPART" && foundTarget) {
         const heading = findHeading(inner);
         if (!heading) {
           walk(inner);
@@ -265,32 +262,47 @@ function collectPart53(roots: unknown): ParsedSubpart[] {
 }
 
 async function main() {
-  console.log("─── 10 CFR Part 53 ingest (Federal Register source) ───");
-  const docNumber = process.env.FR_DOC ?? DEFAULT_FR_DOC;
+  const partNum = process.env.CFR_PART ?? "53";
+  const defaultDoc = partNum === "57" ? "2026-08550" : DEFAULT_FR_DOC;
+  const docNumber = process.env.FR_DOC ?? defaultDoc;
+  console.log(`─── 10 CFR Part ${partNum} ingest (Federal Register source) ───`);
   console.log(`Federal Register doc: ${docNumber}`);
   const { xml, date, title } = await loadXml(docNumber);
   console.log(`parsing ${xml.length.toLocaleString()} bytes`);
 
   const roots = parser.parse(xml);
-  const subparts = collectPart53(roots);
+  const subparts = collectPartSections(roots, partNum);
   console.log(`extracted ${subparts.length} subparts`);
   if (!subparts.length) {
-    console.error("\nNo Part 53 content found in the Federal Register document.");
+    console.error(`\nNo Part ${partNum} content found in the Federal Register document.`);
     process.exit(2);
   }
 
   const sqlite = getRawDb();
   const tx = sqlite.transaction(() => {
-    sqlite.exec(`
-      DELETE FROM cross_refs;
-      DELETE FROM definitions;
-      DELETE FROM requirements;
-      DELETE FROM paragraphs;
-      DELETE FROM sections;
-      DELETE FROM subparts;
-    `);
+    // Only delete rows belonging to this part number, leaving other parts intact
+    const subpartIds = sqlite
+      .prepare(`SELECT id FROM subparts WHERE part_number = ?`)
+      .all(partNum) as Array<{ id: number }>;
+    const spIds = subpartIds.map((r) => r.id);
+    if (spIds.length) {
+      const ph = spIds.map(() => "?").join(",");
+      const sectionIds = sqlite
+        .prepare(`SELECT id FROM sections WHERE subpart_id IN (${ph})`)
+        .all(...spIds) as Array<{ id: number }>;
+      const secIds = sectionIds.map((r) => r.id);
+      if (secIds.length) {
+        const ph2 = secIds.map(() => "?").join(",");
+        sqlite.prepare(`DELETE FROM cross_refs WHERE source_section_id IN (${ph2})`).run(...secIds);
+        sqlite.prepare(`DELETE FROM definitions WHERE section_id IN (${ph2})`).run(...secIds);
+        sqlite.prepare(`DELETE FROM requirements WHERE section_id IN (${ph2})`).run(...secIds);
+        sqlite.prepare(`DELETE FROM paragraphs WHERE section_id IN (${ph2})`).run(...secIds);
+        sqlite.prepare(`DELETE FROM sections WHERE id IN (${ph2})`).run(...secIds);
+      }
+      sqlite.prepare(`DELETE FROM subparts WHERE part_number = ?`).run(partNum);
+    }
 
-    const insSubpart = sqlite.prepare(`INSERT INTO subparts (code, title, ordinal) VALUES (?, ?, ?)`);
+    const insSubpart = sqlite.prepare(`INSERT INTO subparts (part_number, code, title, ordinal) VALUES (?, ?, ?, ?)`);
     const insSection = sqlite.prepare(
       `INSERT INTO sections (subpart_id, code, title, ordinal) VALUES (?, ?, ?, ?)`,
     );
@@ -317,7 +329,7 @@ async function main() {
     let totalSections = 0;
 
     subparts.forEach((sp, i) => {
-      const subpartId = insSubpart.run(sp.code, sp.title, i + 1).lastInsertRowid as number;
+      const subpartId = insSubpart.run(partNum, sp.code, sp.title, i + 1).lastInsertRowid as number;
       sp.sections.forEach((sec, j) => {
         const sectionId = insSection.run(subpartId, sec.code, sec.title, j + 1).lastInsertRowid as number;
         totalSections++;

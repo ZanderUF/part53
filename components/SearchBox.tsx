@@ -8,6 +8,7 @@ type Hit = {
   text_plain: string;
   section_code: string;
   section_title: string;
+  part_number: string;
   snippet: string;
 };
 
@@ -50,7 +51,7 @@ export function SearchBox() {
             <li key={h.id} className="p-3 hover:bg-slate-50">
               <Link href={`/section/${h.section_code}#p-${h.id}`}>
                 <div className="text-xs text-slate-500">
-                  § {h.section_code} — {h.section_title}
+                  Part {h.part_number} · § {h.section_code} — {h.section_title}
                 </div>
                 <div
                   className="mt-1 text-sm text-ink"

@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "next lint",
     "ingest": "tsx scripts/ingest-fr.ts",
+    "ingest:57": "CFR_PART=57 tsx scripts/ingest-fr.ts",
     "ingest:ecfr": "tsx scripts/ingest-ecfr.ts",
     "seed:sample": "tsx scripts/seed-sample.ts"
   },

@@ -4,12 +4,13 @@ export const subparts = sqliteTable(
   "subparts",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
+    partNumber: text("part_number").notNull().default("53"),
     code: text("code").notNull(),
     title: text("title").notNull(),
     ordinal: integer("ordinal").notNull(),
   },
   (t) => ({
-    codeIdx: uniqueIndex("subparts_code_idx").on(t.code),
+    partCodeIdx: uniqueIndex("subparts_part_code_idx").on(t.partNumber, t.code),
   }),
 );
 

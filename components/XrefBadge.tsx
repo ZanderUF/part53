@@ -65,12 +65,7 @@ function XrefLink({
     );
   }
   if (/Subpart\s+([A-Z])/.test(raw)) {
-    const letter = raw.match(/Subpart\s+([A-Z])/)![1];
-    return (
-      <Link href={`/subpart/${letter}`} className="xref-link">
-        {raw}
-      </Link>
-    );
+    return <span className="xref-link">{raw}</span>;
   }
   return <span>{raw}</span>;
 }
