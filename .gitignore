@@ -4,13 +4,16 @@ node_modules
 out/
 build/
 dist/
+*.tsbuildinfo
 
 # data files (large, fetched on demand)
-data/*.xml
+# SQLite database — excluded by default; remove these lines to commit a pre-seeded DB
 data/*.sqlite
 data/*.sqlite-journal
 data/*.sqlite-wal
 data/*.sqlite-shm
+# Cached Federal Register XML downloads
+data/*.xml
 
 # env
 .env
@@ -22,3 +25,6 @@ data/*.sqlite-shm
 *.log
 .idea/
 .vscode/
+
+# Claude Code — keep shared launch config, ignore local settings
+.claude/settings.local.json

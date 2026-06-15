@@ -41,7 +41,7 @@ export function SearchBox() {
       <input
         value={q}
         onChange={(e) => setQ(e.target.value)}
-        placeholder="Search Part 53 (e.g. design features, PRA, siting)…"
+        placeholder="Search all parts (e.g. design features, PRA, inspections)…"
         className="w-full rounded border border-slate-300 bg-white px-4 py-2 text-base shadow-sm focus:border-accent focus:outline-none"
       />
       {loading && <div className="text-xs text-slate-500">Searching…</div>}

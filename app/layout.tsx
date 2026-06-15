@@ -5,7 +5,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "10 CFR Requirements Tracker",
   description:
-    "Decompose, navigate, and track requirements from 10 CFR Parts 53 & 57 (NRC advanced reactor and microreactor frameworks).",
+    "Decompose, navigate, and track requirements from 10 CFR Parts 50, 52, 53 & 57 (NRC reactor licensing and advanced reactor frameworks).",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -18,6 +18,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               10 CFR Tracker
             </Link>
             <nav className="flex gap-4 text-sm text-slate-600">
+              <Link href="/decide" className="hover:text-accent">
+                Pathway guide
+              </Link>
               <Link href="/requirements" className="hover:text-accent">
                 Requirements
               </Link>
@@ -36,7 +39,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <main className="flex-1 max-w-6xl w-full mx-auto px-6 py-8">{children}</main>
         <footer className="border-t border-slate-200 bg-white">
           <div className="max-w-6xl mx-auto px-6 py-4 text-xs text-slate-500">
-            Source: Federal Register (federalregister.gov). This tool is not affiliated with the U.S. NRC.
+            Sources: Federal Register (federalregister.gov) &amp; eCFR (ecfr.gov). This tool is not affiliated with the U.S. NRC.
           </div>
         </footer>
       </body>

@@ -17,9 +17,11 @@ import { extractRequirements } from "./extract-requirements";
 import { extractXrefs } from "./extract-xrefs";
 import { extractDefinition } from "./extract-definitions";
 
-const DEFAULT_FR_DOC = "2026-06048";
+const DEFAULT_FR_DOCS: Record<string, string> = {
+  "53": "2026-06048",
+  "57": "2026-08550",
+};
 const DATA_DIR = path.join(process.cwd(), "data");
-const XML_PATH = path.join(DATA_DIR, "fr-part53.xml");
 
 type AnyNode = Record<string, unknown>;
 
@@ -55,12 +57,13 @@ async function lookupDocMeta(docNumber: string): Promise<{ xmlUrl: string; date:
   return { xmlUrl: json.full_text_xml_url, date: json.publication_date, title: json.title };
 }
 
-async function loadXml(docNumber: string): Promise<{ xml: string; date: string; title: string }> {
+async function loadXml(docNumber: string, partNum: string): Promise<{ xml: string; date: string; title: string }> {
+  const xmlPath = path.join(DATA_DIR, `fr-part${partNum}.xml`);
   fs.mkdirSync(DATA_DIR, { recursive: true });
-  if (process.env.PART53_USE_CACHE === "1" && fs.existsSync(XML_PATH)) {
-    console.log(`using cached XML at ${XML_PATH}`);
+  if (process.env.PART53_USE_CACHE === "1" && fs.existsSync(xmlPath)) {
+    console.log(`using cached XML at ${xmlPath}`);
     return {
-      xml: fs.readFileSync(XML_PATH, "utf8"),
+      xml: fs.readFileSync(xmlPath, "utf8"),
       date: process.env.ECFR_DATE ?? "cached",
       title: "(cached)",
     };
@@ -71,7 +74,7 @@ async function loadXml(docNumber: string): Promise<{ xml: string; date: string; 
   const res = await fetch(meta.xmlUrl);
   if (!res.ok) throw new Error(`XML fetch failed: ${res.status}`);
   const xml = await res.text();
-  fs.writeFileSync(XML_PATH, xml);
+  fs.writeFileSync(xmlPath, xml);
   return { xml, date: meta.date, title: meta.title };
 }
 
@@ -275,13 +278,11 @@ function collectPartSections(roots: unknown, partNum: string): CollectResult {
   return { subparts: allSubparts, partHeading };
 }
 
-async function main() {
-  const partNum = process.env.CFR_PART ?? "53";
-  const defaultDoc = partNum === "57" ? "2026-08550" : DEFAULT_FR_DOC;
-  const docNumber = process.env.FR_DOC ?? defaultDoc;
+export async function ingestPart(partNum: string, docNumber?: string): Promise<void> {
+  const resolvedDoc = docNumber ?? DEFAULT_FR_DOCS[partNum] ?? DEFAULT_FR_DOCS["53"];
   console.log(`─── 10 CFR Part ${partNum} ingest (Federal Register source) ───`);
-  console.log(`Federal Register doc: ${docNumber}`);
-  const { xml, date, title } = await loadXml(docNumber);
+  console.log(`Federal Register doc: ${resolvedDoc}`);
+  const { xml, date, title } = await loadXml(resolvedDoc, partNum);
   console.log(`parsing ${xml.length.toLocaleString()} bytes`);
 
   const roots = parser.parse(xml);
@@ -289,8 +290,9 @@ async function main() {
   console.log(`extracted ${subparts.length} subparts`);
   if (partHeading) console.log(`part heading: ${partHeading}`);
   if (!subparts.length) {
-    console.error(`\nNo Part ${partNum} content found in the Federal Register document.`);
-    process.exit(2);
+    const msg = `No Part ${partNum} content found in the Federal Register document.`;
+    console.error(`\n${msg}`);
+    throw new Error(msg);
   }
 
   const sqlite = getRawDb();
@@ -322,8 +324,8 @@ async function main() {
     ).run(
       partNum,
       partHeading ?? title,
-      docNumber,
-      `https://www.federalregister.gov/documents/full_text/xml/${date.replace(/-/g, "/")}/${docNumber}.xml`,
+      resolvedDoc,
+      `https://www.federalregister.gov/documents/full_text/xml/${date.replace(/-/g, "/")}/${resolvedDoc}.xml`,
     );
 
     const insSubpart = sqlite.prepare(`INSERT INTO subparts (part_number, code, title, ordinal) VALUES (?, ?, ?, ?)`);
@@ -382,18 +384,26 @@ async function main() {
       });
     });
 
-    insRun.run(`fr:${docNumber}`, date, totalParagraphs, totalSections, subparts.length, Date.now());
+    insRun.run(`fr:${resolvedDoc}`, date, totalParagraphs, totalSections, subparts.length, Date.now());
     console.log(
       `inserted: ${subparts.length} subparts, ${totalSections} sections, ${totalParagraphs} paragraphs`,
     );
-    console.log(`source: Federal Register ${docNumber} — ${title}`);
+    console.log(`source: Federal Register ${resolvedDoc} — ${title}`);
   });
   tx();
   rebuildFts();
   console.log("FTS rebuilt; ingest complete.");
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+async function main() {
+  await ingestPart(process.env.CFR_PART ?? "53", process.env.FR_DOC);
+}
+
+// Only auto-run when this file is the entry point (tsx scripts/ingest-fr.ts)
+const _argv1 = process.argv[1] ?? "";
+if (_argv1.endsWith("ingest-fr.ts") || _argv1.endsWith("ingest-fr.js")) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

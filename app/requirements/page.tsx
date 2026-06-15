@@ -11,10 +11,13 @@ export default async function RequirementsPage({
   const parts = listParts();
   if (!parts.length) return <EmptyState />;
 
-  const subparts = sp.part ? listSubparts(sp.part) : listSubparts();
+  // Subpart codes are only unique within a part (e.g. both Part 50 and Part 57
+  // have a "Subpart O"), so the subpart filter is scoped to the selected part.
+  const subparts = sp.part ? listSubparts(sp.part) : [];
+  const activeSubpart = subparts.some((s) => s.code === sp.subpart) ? sp.subpart : undefined;
   const reqs = listAllRequirements({
     partNumber: sp.part,
-    subpartCode: sp.subpart,
+    subpartCode: activeSubpart,
     modal: sp.modal,
     status: sp.status,
   });
@@ -41,9 +44,10 @@ export default async function RequirementsPage({
         />
         <FilterSelect
           name="subpart"
-          current={sp.subpart}
+          current={activeSubpart}
           options={subparts.map((s) => ({ value: s.code, label: `Subpart ${s.code}` }))}
-          placeholder="All subparts"
+          placeholder={sp.part ? "All subparts" : "All subparts (choose a part)"}
+          disabled={!sp.part}
         />
         <FilterSelect
           name="modal"
@@ -94,17 +98,20 @@ function FilterSelect({
   current,
   options,
   placeholder,
+  disabled,
 }: {
   name: string;
   current?: string;
   options: Array<{ value: string; label: string }>;
   placeholder: string;
+  disabled?: boolean;
 }) {
   return (
     <select
       name={name}
       defaultValue={current ?? ""}
-      className="rounded border border-slate-300 bg-white px-2 py-1.5"
+      disabled={disabled}
+      className="rounded border border-slate-300 bg-white px-2 py-1.5 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
     >
       <option value="">{placeholder}</option>
       {options.map((o) => (

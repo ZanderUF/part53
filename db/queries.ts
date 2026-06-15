@@ -54,6 +54,58 @@ export function listParts(): PartInfo[] {
     .all() as PartInfo[];
 }
 
+export type PathwayMetric = {
+  part_number: string;
+  title: string;
+  section_count: number;
+  requirement_count: number;
+  first_subpart_code: string | null;
+  definitions_section_code: string | null;
+};
+
+export function listPathwayMetrics(): PathwayMetric[] {
+  const db = getRawDb();
+  const parts = db
+    .prepare(`SELECT part_number, title FROM parts ORDER BY CAST(part_number AS INTEGER)`)
+    .all() as Array<{ part_number: string; title: string }>;
+  return parts.map((p) => {
+    const section_count = (
+      db
+        .prepare(
+          `SELECT COUNT(*) c FROM sections s JOIN subparts sp ON sp.id = s.subpart_id WHERE sp.part_number = ?`,
+        )
+        .get(p.part_number) as { c: number }
+    ).c;
+    const requirement_count = (
+      db
+        .prepare(
+          `SELECT COUNT(*) c FROM requirements r
+           JOIN sections s ON s.id = r.section_id
+           JOIN subparts sp ON sp.id = s.subpart_id
+           WHERE sp.part_number = ?`,
+        )
+        .get(p.part_number) as { c: number }
+    ).c;
+    const firstSubpart = db
+      .prepare(`SELECT code FROM subparts WHERE part_number = ? ORDER BY ordinal LIMIT 1`)
+      .get(p.part_number) as { code: string } | undefined;
+    const defsSection = db
+      .prepare(
+        `SELECT s.code FROM sections s JOIN subparts sp ON sp.id = s.subpart_id
+         WHERE sp.part_number = ? AND s.title LIKE '%Definitions%' ORDER BY s.ordinal LIMIT 1`,
+      )
+      .get(p.part_number) as { code: string } | undefined;
+    return {
+      part_number: p.part_number,
+      title: p.title,
+      section_count,
+      requirement_count,
+      first_subpart_code: firstSubpart?.code ?? null,
+      definitions_section_code: defsSection?.code ?? null,
+    };
+  });
+}
+
 export function partTitle(partNumber: string): string {
   const row = getRawDb()
     .prepare(`SELECT title FROM parts WHERE part_number = ?`)

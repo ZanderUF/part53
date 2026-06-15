@@ -12,6 +12,9 @@ import {
   partNumberForSection,
 } from "@/db/queries";
 import { ParagraphRenderer } from "@/components/ParagraphRenderer";
+import { SectionNotes } from "@/components/SectionNotes";
+import { SectionNav } from "@/components/SectionNav";
+import { listNotesFor } from "@/db/notes";
 
 export default async function SectionPage({ params }: { params: Promise<{ code: string }> }) {
   const { code } = await params;
@@ -26,6 +29,19 @@ export default async function SectionPage({ params }: { params: Promise<{ code: 
   const outgoing = listXrefsBySection(section.id);
   const incoming = listIncomingXrefs(section.code);
   const knownSectionCodes = new Set(listAllSectionCodes());
+  const notes = listNotesFor("section", section.code);
+
+  const idx = siblings.findIndex((s) => s.code === section.code);
+  const prevSection = idx > 0 ? siblings[idx - 1] : null;
+  const nextSection = idx >= 0 && idx < siblings.length - 1 ? siblings[idx + 1] : null;
+
+  // Appendices are stored as sections with codes like "50.AppB"; they aren't
+  // §-numbered and need a different eCFR link than ordinary sections.
+  const isAppendix = /\.App/i.test(section.code);
+  const codeLabel = isAppendix ? `Appendix ${section.code.replace(/^\d+\.App/i, "")}` : `§ ${section.code}`;
+  const ecfrHref = isAppendix
+    ? `https://www.ecfr.gov/current/title-10/chapter-I/part-${partNum}`
+    : `https://www.ecfr.gov/current/title-10/chapter-I/part-${code.split(".")[0]}/section-${section.code}`;
 
   return (
     <div className="space-y-8">
@@ -42,16 +58,16 @@ export default async function SectionPage({ params }: { params: Promise<{ code: 
             </Link>
           </>
         )}{" "}
-        / § {section.code}
+        / {codeLabel}
       </nav>
 
       <header className="flex items-start justify-between gap-6">
         <div>
-          <div className="text-xs uppercase tracking-wide text-slate-500">§ {section.code}</div>
+          <div className="text-xs uppercase tracking-wide text-slate-500">{codeLabel}</div>
           <h1 className="mt-1 text-2xl font-semibold">{section.title}</h1>
         </div>
         <a
-          href={`https://www.ecfr.gov/current/title-10/chapter-I/part-${code.split(".")[0]}/section-${section.code}`}
+          href={ecfrHref}
           target="_blank"
           rel="noreferrer"
           className="text-xs xref-link"
@@ -59,6 +75,8 @@ export default async function SectionPage({ params }: { params: Promise<{ code: 
           View on eCFR.gov →
         </a>
       </header>
+
+      <SectionNav prev={prevSection} next={nextSection} />
 
       <article className="rounded border border-slate-200 bg-white p-6">
         <ParagraphRenderer paragraphs={paragraphs} knownSectionCodes={knownSectionCodes} />
@@ -84,6 +102,8 @@ export default async function SectionPage({ params }: { params: Promise<{ code: 
           </ul>
         </section>
       )}
+
+      <SectionNotes targetCode={section.code} initialNotes={notes} />
 
       <section className="grid gap-6 md:grid-cols-2">
         <div>
@@ -122,32 +142,10 @@ export default async function SectionPage({ params }: { params: Promise<{ code: 
         </div>
       </section>
 
-      {siblings.length > 1 && (
-        <nav className="flex justify-between border-t border-slate-200 pt-4 text-sm">
-          {(() => {
-            const idx = siblings.findIndex((s) => s.code === section.code);
-            const prev = idx > 0 ? siblings[idx - 1] : null;
-            const next = idx >= 0 && idx < siblings.length - 1 ? siblings[idx + 1] : null;
-            return (
-              <>
-                {prev ? (
-                  <Link href={`/section/${prev.code}`} className="xref-link">
-                    ← § {prev.code}
-                  </Link>
-                ) : (
-                  <span />
-                )}
-                {next ? (
-                  <Link href={`/section/${next.code}`} className="xref-link">
-                    § {next.code} →
-                  </Link>
-                ) : (
-                  <span />
-                )}
-              </>
-            );
-          })()}
-        </nav>
+      {(prevSection || nextSection) && (
+        <div className="border-t border-slate-200 pt-6">
+          <SectionNav prev={prevSection} next={nextSection} />
+        </div>
       )}
     </div>
   );

@@ -3,12 +3,17 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "predev": "tsx scripts/setup.ts",
     "dev": "next dev",
     "build": "next build",
+    "prestart": "tsx scripts/setup.ts",
     "start": "next start",
     "lint": "next lint",
+    "setup": "tsx scripts/setup.ts",
     "ingest": "tsx scripts/ingest-fr.ts",
     "ingest:57": "cross-env CFR_PART=57 tsx scripts/ingest-fr.ts",
+    "ingest:50": "cross-env CFR_PART=50 tsx scripts/ingest-ecfr.ts",
+    "ingest:52": "cross-env CFR_PART=52 tsx scripts/ingest-ecfr.ts",
     "ingest:ecfr": "tsx scripts/ingest-ecfr.ts",
     "seed:sample": "tsx scripts/seed-sample.ts"
   },
